@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 
-# This script will load Qs# chunk pickles according to the omnipickle and 
-# combine them into complete Qs pickles
-#
-# Qs_omnipickle = {period_path: Qs_pickle_paths}
-#
 # Qs# pickles are panda dataframes directly translated from the raw txt files
 
 import matplotlib.pyplot as plt
-import os
 from os.path import join as pjoin
 import numpy as np
 import pandas as pd
@@ -23,12 +17,20 @@ from helpyr_misc import nsplit
 from helpyr_misc import ensure_dir_exists
 from helpyr_misc import exclude_df_cols
 
-import global_settings as settings
+class Settings:
+    root_dir = "E:\LT_Qs_Combine\LT_Results" # Windows style path
+    #root_dir = "/home/alex/ubc/feed-timing/data" # Unix style path
+    lighttable_data_dir = pjoin(root_dir, "merged-lighttable-results")
+    Qs_raw_pickles_dir = pjoin(lighttable_data_dir, "raw-pickles")
+    Qs_primary_pickles_dir = pjoin(lighttable_data_dir, "merged-pickles")
+
+    lighttable_bedload_cutoff = 800 # g/s max rate
+
 
 # Primary Pickle Processor takes raw Qs and Qsn pickles and condenses them into 
 # one Qs pickle for each period. ie. Does processing within each period.
 
-class PrimaryPickleProcessor:
+class QsPickleProcessor:
 
     # Outline:
     # 1) load Qs_metapickle
@@ -51,9 +53,9 @@ class PrimaryPickleProcessor:
 
     def __init__(self, output_txt=False):
         # File locations
-        self.root_dir = settings.root_dir
-        self.pickle_source = settings.Qs_raw_pickles
-        self.pickle_destination = settings.Qs_primary_pickles
+        self.root_dir = Settings.root_dir
+        self.pickle_source = Settings.Qs_raw_pickles_dir
+        self.pickle_destination = Settings.Qs_primary_pickles_dir
         self.txt_destination = f"{self.root_dir}/combined-txts"
         self.log_filepath = "./log-files/Qs_primary_processor.txt"
         self.metapickle_name = "Qs_metapickle"
@@ -195,7 +197,7 @@ class PrimaryPickleProcessor:
 
         if self.Qs0_data is not None and self.Qsn_data:
             name_list = ', '.join(self.Qsn_names)
-            error_msg = PrimaryPickleProcessor.error_codes['CQF']
+            error_msg = QsPickleProcessor.error_codes['CQF']
             self.logger.warning([error_msg,
                 "Qs.txt and Qs#.txt files both exist",
                f"Qs#.txt: {name_list}"])
@@ -283,7 +285,7 @@ class PrimaryPickleProcessor:
         self.final_output.loc[nan_rows, 'missing ratio':] = np.nan
 
         ## Set outliers to Nan
-        max_threshold = settings.lighttable_bedload_cutoff
+        max_threshold = Settings.lighttable_bedload_cutoff
         trim_rows = self.final_output['Bedload all'] > max_threshold
         trim_count = np.sum(trim_rows)
         if trim_count > 0:
@@ -323,7 +325,7 @@ class PrimaryPickleProcessor:
         if raw_exists and combined_exists:
             self._difference_check()
         elif not(raw_exists or combined_exists):
-            error_msg = PrimaryPickleProcessor.error_codes['NDF']
+            error_msg = QsPickleProcessor.error_codes['NDF']
             self.logger.warning([error_msg,
                 "Both the raw Qs pickle and combined Qs df are missing."])
         else:
@@ -366,7 +368,7 @@ class PrimaryPickleProcessor:
             tolerance = self.difference_tolerance
 
             is_tolerant = '' if diff_ratio < tolerance else ' NOT'
-            error_msg = PrimaryPickleProcessor.error_codes['MMD']
+            error_msg = QsPickleProcessor.error_codes['MMD']
             msgs = [error_msg,
                     f"Difference ratio of {diff_ratio:.3f} is{is_tolerant} within tolerance of {tolerance}.",
                     f"{diff_rows_count} conflicting rows found out of {rows_count}",
@@ -596,13 +598,13 @@ class PrimaryPickleProcessor:
             self.loader.produce_pickles(prepickles)
             self.combined_file_counter += 1
         else:
-            error_msg = PrimaryPickleProcessor.error_codes['NDF']
+            error_msg = QsPickleProcessor.error_codes['NDF']
             self.logger.warning([error_msg,
                 f"Pickle not created for {self.pkl_name}"])
 
     def write_combined_txt(self):
         filename = f"{self.pkl_name}.txt"
-        filepath = os.path.join(self.txt_destination, filename)
+        filepath = pjoin(self.txt_destination, filename)
         data = self.final_output
         
         self.loader.save_txt(data, filepath, is_path=True)
@@ -640,7 +642,7 @@ class PrimaryPickleProcessor:
 
     def write_stats_txt(self):
         filename = f"{self.statspickle_name}.txt"
-        filepath = os.path.join(self.txt_destination, filename)
+        filepath = pjoin(self.txt_destination, filename)
         data = self.pd_summary_stats
         
         kwargs = {'index'  : True,
@@ -650,9 +652,14 @@ class PrimaryPickleProcessor:
 
 
 
-
-
 if __name__ == "__main__":
+    # Run the extraction crawler
+    crawler = QsExtractor()
+    exp_root = Settings.root_dir
+    crawler.set_root(f"{exp_root}/extracted-lighttable-results")
+    crawler.set_output_dir(Settings.Qs_raw_pickles_dir)
+    crawler.run()
+
     # Run the script
-    primary = PrimaryPickleProcessor(output_txt=True)
+    primary = QsPickleProcessor(output_txt=True)
     primary.run()

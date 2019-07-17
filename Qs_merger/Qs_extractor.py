@@ -1,4 +1,4 @@
-import os
+from os import join as pjoin
 import numpy as np
 
 # From Helpyr
@@ -13,18 +13,11 @@ from xlrd.biffh import XLRDError
 
 
 # ISSUE TO ADDRESS:
-# ExtractionCrawler appears to be out of date. Might not function without 
-# serious tweaking.
-# 
 # Some Qs.txt and Qs1.txt files appear to be nearly identical copies. The first 
 # row is usually different and sometimes a random row where a grain count is 1 
 # off. Preference is given to Qs1.txt?
-#
-# 4A/rising-87L/results-t40-t60 -> Multiple Qs files are wrong.  Full 
-# of zero values. Maybe linked to minimum particles needed for 
-# velocity?? Might need to reanalyze many files....
 
-class ExtractionCrawler (Crawler):
+class QsExtractor (Crawler):
     # The Extraction Crawler does the initial work of finding all the data 
     # files and converting them to pickles
 
@@ -32,12 +25,7 @@ class ExtractionCrawler (Crawler):
         logger = Logger(log_filepath, default_verbose=True)
         Crawler.__init__(self, logger)
 
-        self.mode_dict['extract-manual']      = self.run_extract_manual_data
-        self.mode_dict['extract-light-table'] = self.run_extract_light_table_data
-
     def end(self):
-        Crawler.end(self)
-        self.logger.end_output()
 
     def make_pickle(self, pkl_name, data):
         self.logger.write(f"Performing picklery on {pkl_name}")
@@ -46,122 +34,21 @@ class ExtractionCrawler (Crawler):
         self.logger.decrease_global_indent()
         return picklepaths
 
-    def generic_intro(self, start_run_msgs=[]):
-        # Do some common intro stuff, like writing to the log file and starting 
-        # the data loader.
-        self.logger.write_section_break()
-        self.logger.write(start_run_msgs)
 
-        data_dir = self.root
-        pickle_dir = os.path.join(data_dir, 'raw-pickles')
+    def set_output_dir(self, dir):
+        self.output_dir = dir
         ensure_dir_exists(pickle_dir, self.logger)
-        self.loader = data_loading.DataLoader(data_dir, pickle_dir, self.logger)
 
+    def run(self):
+        # Overloads Crawler.run function. The flexibility from run modes is not 
+        # necessary for this project.
 
-    ### Obsolete for manual data. Use manual_processor.py
-    def run_extract_manual_data(self):
-        # Extract the depth and data from excel files and save them as  
-        # pickles.
-        self.generic_intro(["Extracting manual data"])
-
-        self.logger.write("Finding files")
-        depths_xlsx = self.get_target_files(['flow-depths-??.xlsx'])
-        masses_xlsx = self.get_target_files(['masses-??.xlsx'])
-
-        self.extract_depths(depths_xlsx)
-
-        self.end()
-
-    def extract_depths(self, depths_xlsx):
-        self.logger.write("Extracting depth data")
-        self.logger.increase_global_indent()
-        kwargs = {
-                'sheetname'  : 'Sheet1',
-                'header'     : 0,
-                'skiprows'   : 1,
-                'index_col'  : [0, 1, 2, 3],
-                'parse_cols' : range(1,18)
-                }
-
-        for depth_filepath in depths_xlsx:
-            self.logger.write(f"Extracting {depth_filepath}")
-
-            data_dic = {} # For temp processing... delete later
-
-            # Extract experiment from filepath
-            depth_path, depth_filename = os.path.split(depth_filepath)
-            source_name, experiment = depth_filename.rsplit('-', 1)
-            experiment = experiment.split('.')[0]
-
-            # Read and prep raw data
-            try:
-                data = self.loader.load_xlsx(depth_filepath, kwargs, add_path=False)
-            except XLRDError:
-                kwargs['sheetname'] = "All"
-                data = self.loader.load_xlsx(depth_filepath, kwargs, add_path=False)
-            data = self.reformat_data(data)
-
-            # Extract surface and bed measurements then save them as pickles
-            slice_all = slice(None)
-            for location in "surface", "bed":
-                # Pull out all rows with a location then drop the location 
-                # label
-                loc_data = data.loc[(slice_all, slice_all, slice_all, slice_all, location),:]
-                loc_data.index = loc_data.index.droplevel(4) # Drop location category
-
-                # Make pickles
-                pkl_name = f"{experiment}-profile-{location}"
-                self.make_pickle(pkl_name, loc_data)
-                data_dic[location] = loc_data
-                self.logger.decrease_global_indent()
-
-        self.logger.decrease_global_indent()
-        self.logger.write("Depth data extraction complete")
-
-    def reformat_data(self, data):
-        # Rename the row labels and reorder all the rows to chronologically 
-        # match my experiment design. Without reordering, falling comes before 
-        # rising and the repeated discharged could get confused.
-        self.logger.write("Reformatting data")
-        data.sort_index(inplace=True)
-
-        # Rename provided level names
-        new_names = ['Limb', 'Discharge (L/s)', 'Time (min)', 'Location']
-        data.index.names = new_names
-
-        def orderizer(args):
-            weights = {'rising'  : 0,
-                       'falling' : 1,
-                       50  : 0,
-                       62  : 1,
-                       75  : 2,
-                       87  : 3,
-                       100 : 4
-                      }
-            w_Qmax = weights[100]
-            w_limb = weights[args[0]]
-            w_Q = weights[args[1]]
-            order = w_Q  + 2 * w_limb * (w_Qmax - w_Q)
-            exp_time = order * 60 + args[2]
-            return exp_time
-            
-        # Add a new level providing the row order
-        name = 'Exp time'
-        data[name] = data.index
-        data[name] = data[name].map(orderizer)
-        data.set_index(name, append=True, inplace=True)
-
-        # Make the Order index level zero
-        new_names.insert(0, name)
-        data = data.reorder_levels(new_names)
-
-        data.sort_index(inplace=True)
-        return data
-
-
-    def run_extract_light_table_data(self):
         # Extract the Qs data from text files and save them as pickles
-        self.generic_intro(["Extracting light table data"])
+        self.logger.write_section_break()
+        self.logger.write(["Extracting light table data"])
+
+        pickle_dir = self.output_dir
+        self.loader = data_loading.DataLoader(data_dir, pickle_dir, self.logger)
 
         self.logger.write("Finding files")
         sediment_flux_files = self.get_target_files(['Qs?.txt', 'Qs??.txt'],
@@ -226,8 +113,6 @@ class ExtractionCrawler (Crawler):
 
         self.logger.decrease_global_indent()
         self.logger.write("Light table data extraction complete")
-        #self.check_for_Qs_errors(data)
-        #self.check_for_Qs_duplication
     
     def _merge_metapickle(self, new_dict, old_dict):
         merge = lambda a, b: list(set(a + b))
@@ -284,7 +169,7 @@ class ExtractionCrawler (Crawler):
                 self.logger.write(f'Pickling {name}')
                 
                 # Read and prep raw data
-                filepath = os.path.join(period_path, name)
+                filepath = pjoin(period_path, name)
                 data = self.loader.load_txt(filepath, Qs_kwargs, add_path=False)
 
                 # Make pickles
@@ -292,25 +177,12 @@ class ExtractionCrawler (Crawler):
 
         return picklepaths
 
-    def check_for_Qs_errors(self, Qs_data):
-        # Check for basic errors in the Qs_data
-        
-        # Check for all zero values
-        nrows = Qs_data.shape[0]
-        nzeros = np.count_nonzero(Qs_data, axis=0)
-
-        percent_zeros = nzeros / nrows
-        print_options = np.get_printoptions()
-        np.set_printoptions(precision=2)
-        self.logger.write(["Percent zeros", percent_zeros.__str__()])
-        np.set_printoptions(precision=print_options['precision'])
 
 
-
-if __name__ == "__main__":
-    crawler = ExtractionCrawler()
-    exp_root = '/home/alex/ubc/research/feed-timing/data'
-    #crawler.set_root(f"{exp_root}/data-links/manual-data")
-    #crawler.run('extract-manual')
-    crawler.set_root(f"{exp_root}/extracted-lighttable-results")
-    crawler.run('extract-light-table')
+#if __name__ == "__main__":
+#    crawler = QsExtractor()
+#    exp_root = '/home/alex/ubc/research/feed-timing/data'
+#    #crawler.set_root(f"{exp_root}/data-links/manual-data")
+#    #crawler.run('extract-manual')
+#    crawler.set_root(f"{exp_root}/extracted-lighttable-results")
+#    crawler.run('extract-light-table')

@@ -1,3 +1,76 @@
+Qs_merger
+
+This code is a simplified version of the data_wrangling repository written by 
+Alex Mitchell to process his flume experiment data. The original code goes way 
+above and beyond (a.k.a. overcomplicated for the problem) what has turned out 
+to be useful for other people in the lab. Therefore, I am removing all the 
+excess functionality and most of the excess flexibility/rigidity to get 
+something that is easy to use and won't break with a new data set.
+
+The goal of the Qs_merger project is to crawl through a given root directory to 
+locate all Qs#.txt files and then combine them into just one Qs.txt file per 
+period. Qs_extractor.py does the crawling and the Qs_pickle_processor.py does 
+the combining. Original Qs#.txt files are converted to python pickles and there 
+is some minor error checking along the way. The main output is a Qs.txt file 
+for each period, but an equivalent pickled version (of a Pandas dataframe 
+object) is available too. However, the pickled version is only useful for the 
+enlightened few that program in Python, likely also the enlightened few that 
+bother to read this README file. :P
+
+It should be as simple as setting the root directory and running. Hopefully it 
+gets there!
+
+While this project was developed as a git repository by Alex, it will be 
+distributed as copies of the repository instead of clones that are linked to 
+the online repository (https://github.com/alexmitchell/Qs_merger). It is not 
+the proper use of git. The lab should create a git account so that each 
+computer is using the same repository. As it is, if you need to change anything 
+in the code (e.g. fix a bug make an improvement) it will be a pain in the butt 
+to share that with the other computers. 
+
+To install:
+1) navigate to the main directory for the helpyr package (also written by Alex 
+Mitchell)
+2) run:
+    conda install --file requirements.txt
+    pip install -e .
+
+    First line installs the dependencies listed in requirements.txt into the 
+    conda environment
+    Second line installs the helpyr package into the current environment in 
+    developer mode.
+
+3) navigate to the main directory for Qs_merger
+4) run:
+    conda install --file requirements.txt
+    pip install -e .
+
+5) Give David (the lab tech at the time of writing) a high five cause that was 
+so easy
+
+
+To run (still under construction):
+1) Either set the root directory in the Settings class in 
+Qs_pickle_processor.py or move all your data into the directory listed there.
+2) run:
+    python Qs_pickle_processor.py
+
+3) Give David (the lab tech at the time of writing) a high five cause that was 
+so easy
+
+
+
+
+
+################################################################################
+The rest of this document is from the data_wrangling README. It won't be 
+directly relevant to users of Qs_merger, but you are welcome to read it. It is 
+also way out of date for the data_wrangling repository.
+################################################################################
+
+
+
+
 Started this file way too late...
 
 Lighttable workflow:
@@ -74,13 +147,14 @@ comments and ideas:
   abstract data tree is build from a particular data set. Say you don't have Qs 
   data, then the code would be useless.
 
-- The Universal Grapher is just a hot mess and I'm not sure of a way to make it 
-  better. Each type of graph NEEDS its own specific plotting and formatting 
-  code. Even if several different plots have similar code structure, it would 
-  be impossible/impracticable to abstract it more. Some effort has been make to 
-  use general functions though. It would be good to make the functions/argument 
-  style consistent. I kept switching between using kwargs, **kwargs, sticking 
-  kwargs in other kwargs, and other ways to pass information around.
+- The Universal Grapher is just a horrible mess and I'm not sure of a way to 
+  make it better. Each type of graph NEEDS its own specific plotting and 
+  formatting code. Even if several different plots have similar code structure, 
+  it would be impossible/impracticable to abstract it more. Some effort has 
+  been make to use general functions though. It would be good to make the 
+  functions/argument style consistent. I kept switching between using kwargs, 
+  **kwargs, sticking kwargs in other kwargs, and other ways to pass information 
+  around.
 
 - It would be nice to abstract the Omnimanager from data types. That would make 
   the code more portable to other types of research, not just flume experiments 
