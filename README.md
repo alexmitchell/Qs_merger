@@ -50,8 +50,8 @@ so easy
 
 
 To run (still under construction):
-1) Either set the root directory in the Settings class in 
-Qs_pickle_processor.py or move all your data into the directory listed there.
+1) Either set the root directory in the settings file in settings.py or move 
+all your data into the directory listed there.
 2a) Navigate to where the Qs_pickle_processor.py is located.
 2b) run:
     python Qs_pickle_processor.py
