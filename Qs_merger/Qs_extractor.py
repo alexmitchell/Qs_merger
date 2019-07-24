@@ -1,15 +1,18 @@
-from os import join as pjoin
+import os
+from os.path import join as pjoin
 import numpy as np
 
 # From Helpyr
-import data_loading
-from helpyr_misc import nsplit
-from helpyr_misc import ensure_dir_exists
-from logger import Logger
-from crawler import Crawler
+from helpyr import data_loading
+from helpyr.helpyr_misc import nsplit
+from helpyr.helpyr_misc import ensure_dir_exists
+from helpyr import logger as hlp_logger
+from helpyr import crawler as hlp_crawler
 
 from xlrd.biffh import XLRDError
 
+
+import settings
 
 
 # ISSUE TO ADDRESS:
@@ -17,52 +20,50 @@ from xlrd.biffh import XLRDError
 # row is usually different and sometimes a random row where a grain count is 1 
 # off. Preference is given to Qs1.txt?
 
-class QsExtractor (Crawler):
+class QsExtractor (hlp_crawler.Crawler):
     # The Extraction Crawler does the initial work of finding all the data 
     # files and converting them to pickles
 
-    def __init__(self, log_filepath="./log-files/extraction-crawler.txt"):
-        logger = Logger(log_filepath, default_verbose=True)
-        Crawler.__init__(self, logger)
+    def __init__(self, root_dir, output_dir):
+        log_filepath = pjoin(root_dir, 'log-files', 'QsExtractor.txt')
+        logger = hlp_logger.Logger(log_filepath, default_verbose=True)
+        hlp_crawler.Crawler.__init__(self, logger)
 
-    def end(self):
+        self.set_root(root_dir)
+        self.output_dir = output_dir
+        ensure_dir_exists(output_dir, logger)
 
-    def make_pickle(self, pkl_name, data):
-        self.logger.write(f"Performing picklery on {pkl_name}")
-        self.logger.increase_global_indent()
-        picklepaths = self.loader.produce_pickles({pkl_name:data})
-        self.logger.decrease_global_indent()
-        return picklepaths
+        self.loader = data_loading.DataLoader(root_dir, output_dir, logger)
 
-
-    def set_output_dir(self, dir):
-        self.output_dir = dir
-        ensure_dir_exists(pickle_dir, self.logger)
 
     def run(self):
         # Overloads Crawler.run function. The flexibility from run modes is not 
         # necessary for this project.
 
+        logger = self.logger
+
         # Extract the Qs data from text files and save them as pickles
-        self.logger.write_section_break()
-        self.logger.write(["Extracting light table data"])
+        logger.write_section_break()
+        logger.write(["Extracting light table data"])
 
-        pickle_dir = self.output_dir
-        self.loader = data_loading.DataLoader(data_dir, pickle_dir, self.logger)
-
-        self.logger.write("Finding files")
-        sediment_flux_files = self.get_target_files(['Qs?.txt', 'Qs??.txt'],
+        logger.write("Finding files")
+        raw_Qs_files = self.get_target_files(['Qs?.txt', 'Qs??.txt'],
                 verbose_file_list=True)
-        if len(sediment_flux_files) == 0:
-            self.logger.write("No files found!")
+
+        if len(raw_Qs_files) == 0:
+            logger.write("No files found!")
+            self.end()
+            return None
         else:
-            self.extract_light_table(sediment_flux_files)
+            metapickle_path = self.extract_light_table(raw_Qs_files)
+            self.end()
+            return metapickle_path
 
-        self.end()
 
-    def extract_light_table(self, sediment_flux_txt_files):
-        self.logger.write("Extracting light table data")
-        self.logger.increase_global_indent()
+    def extract_light_table(self, raw_Qs_txt_files):
+        lg = self.logger
+        lg.write("Extracting light table data")
+        lg.increase_global_indent()
 
         # Prepare kwargs for reading Qs text files
         Qs_column_names = [
@@ -87,56 +88,72 @@ class QsExtractor (Crawler):
                 'names'     : Qs_column_names,
                 }
 
-        period_dict = self.build_period_dict(sediment_flux_txt_files)
+        period_dict = self.build_period_dict(raw_Qs_txt_files)
         pickle_dict = {}
 
         # Create new pickles if necessary
         for period_path in period_dict:
-            self.logger.write(f"Extracting {period_path}")
-            self.logger.increase_global_indent()
+            lg.write(f"Extracting {period_path}")
+            lg.increase_global_indent()
 
             fnames = period_dict[period_path]
             pickle_dict[period_path] = self.pickle_Qs_text_files(
                     period_path, fnames, Qs_kwargs)
-            self.logger.decrease_global_indent()
+            lg.decrease_global_indent()
 
         # Update the metapickle
         # it describes which pkl files belong to which periods
-        metapickle_name = "Qs_metapickle"
+        metapickle_name = settings.metapickle_name
         if self.loader.is_pickled(metapickle_name):
             # Pickled metapickle already exists.
             # Update the metapickle
-            self.logger.write(f"Updating {metapickle_name}...")
-            existing = self.loader.load_pickle(metapickle_name, use_source=False)
-            pickle_dict = self._merge_metapickle(pickle_dict, existing)
-        self.make_pickle(metapickle_name, pickle_dict)
+            lg.write(f"Updating {metapickle_name}...")
+            existing = self.loader.load_pickle(
+                    metapickle_name, use_source=False)
+            pickle_dict = self._merge_metapickle(
+                    period_dict, pickle_dict, existing)
 
-        self.logger.decrease_global_indent()
-        self.logger.write("Light table data extraction complete")
+        metapickle_path = self.make_pickle(metapickle_name, pickle_dict, 
+                overwrite=True)[0]
+
+        lg.decrease_global_indent()
+        lg.write("Light table data extraction complete")
+
+        return metapickle_path
     
-    def _merge_metapickle(self, new_dict, old_dict):
+    def _merge_metapickle(self, period_dict, new_dict, old_dict):
         merge = lambda a, b: list(set(a + b))
+
+        # Note: your file naming convention will be different so I can't sort 
+        # the dictionary entries.
+        #
         file_name = lambda path: path.rsplit('_',1)[1]
         file_num = lambda name: int(name[2:-4]) if name[2:-4].isdigit() else 0
         sort_key = lambda path: file_num(file_name(path))
 
-        #period_dict[period_path].sort(key=file_num)
+        # Can't remember why I sort period_dict here..... Seems like it should 
+        # be somewhere else
+        for period_path in period_dict.keys():
+            sorted = period_dict[period_path].sort(key=file_num)
+            period_dict[period_path] = sorted
 
         nd = new_dict
         od = old_dict
+
         old_dict.update(
             {nk: merge(nd[nk], od[nk] if nk in od else []) for nk in nd.keys()})
         for key in old_dict:
             old_dict[key].sort(key=sort_key)
+
         return old_dict
 
-    def build_period_dict(self, sediment_flux_txt):
+    def build_period_dict(self, raw_Qs_txt_files):
         # Build a dict of associated Qs#.txt files per 20 minute periods
         # Dict values are sorted lists of Qs#.txt file paths
         # Dict keys are the results directory paths
         period_dict = {}
         self.logger.write("Building dict of Qs files")
-        for Qs_filepath in sediment_flux_txt:
+        for Qs_filepath in raw_Qs_txt_files:
 
             # Extract meta data from filepath
             fpath, fname = nsplit(Qs_filepath, 1)
@@ -146,27 +163,38 @@ class QsExtractor (Crawler):
             else:
                 period_dict[fpath] = [fname]
 
-        # Sort the associated files
-        for period_path in period_dict:
-            file_num = lambda s: int(s[2:-4]) if s[2:-4].isdigit() else 0
-            period_dict[period_path].sort(key=file_num)
-            #print(period_path[-30:], period_dict[period_path])
+        # Note: Your project will have a different file naming convention, so 
+        # the sorting method that worked for me won't work for you.  Order 
+        # should not matter to the Qs_merger.
+        #
+        ## Sort the associated files
+        #for period_path in period_dict:
+        #    file_num = lambda s: int(s[2:-4]) if s[2:-4].isdigit() else 0
+        #    period_dict[period_path].sort(key=file_num)
+        #    #print(period_path[-30:], period_dict[period_path])
 
         return period_dict
 
     def pickle_Qs_text_files(self, period_path, Qs_names, Qs_kwargs):
         # Check for preexisting pickles.
         # If they don't exist yet, create new ones and return the filepaths
-        _, experiment, step, rtime = nsplit(period_path, 3)
+
+        # Note: Your naming convention will be different than mine. Therefore, 
+        # this code will reuse the name that was given to it.
+        
+        #_, experiment, step, rtime = nsplit(period_path, 3)
+        _, period_name = nsplit(period_path, 1)
+        period_name = period_name.replace('results-', '')
 
         picklepaths = []
         for name in Qs_names:
-            pkl_name = f"{experiment}_{step}_{rtime[8:]}_{name[:-4]}"
+            #pkl_name = f"{experiment}_{step}_{rtime[8:]}_{name[:-4]}"
+            pkl_name = f"{period_name}_{name[:-4]}"
 
             if self.loader.is_pickled(pkl_name):
-                self.logger.write(f'Pickle {name} preexists. Nothing to do.')
+                self.logger.write(f'Pickle {pkl_name} preexists. Nothing to do.')
             else:
-                self.logger.write(f'Pickling {name}')
+                self.logger.write(f'Pickling {pkl_name}')
                 
                 # Read and prep raw data
                 filepath = pjoin(period_path, name)
@@ -177,6 +205,14 @@ class QsExtractor (Crawler):
 
         return picklepaths
 
+
+    def make_pickle(self, pkl_name, data, overwrite=False):
+        self.logger.write(f"Performing picklery on {pkl_name}")
+        self.logger.increase_global_indent()
+
+        picklepaths = self.loader.produce_pickles({pkl_name:data}, overwrite=overwrite)
+        self.logger.decrease_global_indent()
+        return picklepaths
 
 
 #if __name__ == "__main__":

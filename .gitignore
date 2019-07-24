@@ -1,6 +1,7 @@
 test_output/
 log-files/
 src/__init__.py
+Qs-merger-output/
 
 # Swap files
 *.swp

@@ -15,18 +15,15 @@ from helpyr import data_loading
 from helpyr import logger
 from helpyr import helpyr_misc as hm
 
-class Settings:
-    root_dir = "E:\LT_Qs_Combine\LT_Results" # Windows style path
-    #root_dir = "/home/alex/ubc/feed-timing/data" # Unix style path
-    lighttable_data_dir = pjoin(root_dir, "merged-lighttable-results")
-    Qs_raw_pickles_dir = pjoin(lighttable_data_dir, "raw-pickles")
-    Qs_primary_pickles_dir = pjoin(lighttable_data_dir, "merged-pickles")
-
-    lighttable_bedload_cutoff = 800 # g/s max rate
+import settings
+import Qs_extractor
 
 
 # Primary Pickle Processor takes raw Qs and Qsn pickles and condenses them into 
 # one Qs pickle for each period. ie. Does processing within each period.
+
+# Note: a period is one continuous run of the lighttable. There will be one or 
+# more Qs txt files associated with each period.
 
 class QsPickleProcessor:
 
@@ -49,14 +46,14 @@ class QsPickleProcessor:
             'MMD' : "Mismatched Data",
             }
 
-    def __init__(self, output_txt=False):
+    def __init__(self, output_txt=False, metapickle_path=None):
         # File locations
-        self.root_dir = Settings.root_dir
-        self.pickle_source = Settings.Qs_raw_pickles_dir
-        self.pickle_destination = Settings.Qs_primary_pickles_dir
-        self.txt_destination = f"{self.root_dir}/combined-txts"
-        self.log_filepath = "./log-files/Qs_primary_processor.txt"
-        self.metapickle_name = "Qs_metapickle"
+        self.root_dir = settings.root_dir
+        self.pickle_source = settings.Qs_raw_pickles_dir
+        self.pickle_destination = settings.Qs_merged_pickles_dir
+        self.txt_destination = settings.Qs_merged_txt_dir
+        self.log_filepath = pjoin(settings.root_dir, 'log-files', 'QsPickleProcessor.txt')
+        self.metapickle_path = metapickle_path
         self.statspickle_name = "Qs_summary_stats"
         self.output_txt = output_txt
         
@@ -68,7 +65,7 @@ class QsPickleProcessor:
         # Start up logger
         self.logger = logger.Logger(self.log_filepath, default_verbose=True)
         hm.ensure_dir_exists(self.pickle_destination, self.logger)
-        self.logger.write(["Begin Primary Pickle Processor output", asctime()])
+        self.logger.write(["Begin Qs Pickle Processor output", asctime()])
 
         # Start up loader
         self.loader = data_loading.DataLoader(self.pickle_source, 
@@ -79,7 +76,12 @@ class QsPickleProcessor:
         indent_function = self.logger.run_indented_function
 
         # Load Qs_metapickle
-        self.metapickle = self.loader.load_pickle(self.metapickle_name)
+        if self.metapickle_path is None:
+            self.metapickle = self.loader.load_pickle(settings.metapickle_name)
+        else:
+            self.metapickle = self.loader.load_pickle(self.metapickle_path, 
+                    add_path=False)
+
         self.raw_file_counter = 0
         self.combined_file_counter = 0
         self.summary_stats = {} # (pkl_name, stat_type) : stat_row}
@@ -97,10 +99,10 @@ class QsPickleProcessor:
             self.accumulating_overlap = None
 
             # Get meta info
-            _, experiment, step, rperiod = hm.nsplit(self.current_period_path, 3)
-            period = rperiod[8:]
-            msg = f"Processing {experiment} {step} {period}..."
-            self.pkl_name = '_'.join(['Qs', experiment, step, period])
+            period_name = hm.nsplit(self.current_period_path, 1)[1]
+            period_name = period_name.replace('results-', '')
+            msg = f"Processing {period_name}..."
+            self.pkl_name = '_'.join(['Qs', period_name])
 
             indent_function(self.process_period, before_msg=msg)
 
@@ -171,6 +173,7 @@ class QsPickleProcessor:
         # Load the sorted list of paths for this period
         self.Qs_path_list = self.metapickle[self.current_period_path]
         # Load the associated data
+
         Qs_period_data = self.loader.load_pickles(self.Qs_path_list, add_path=False)
 
         for Qs_path in self.Qs_path_list:
@@ -283,7 +286,7 @@ class QsPickleProcessor:
         self.final_output.loc[nan_rows, 'missing ratio':] = np.nan
 
         ## Set outliers to Nan
-        max_threshold = Settings.lighttable_bedload_cutoff
+        max_threshold = settings.lighttable_bedload_cutoff
         trim_rows = self.final_output['Bedload all'] > max_threshold
         trim_count = np.sum(trim_rows)
         if trim_count > 0:
@@ -305,14 +308,8 @@ class QsPickleProcessor:
         else:
             self.logger.write("No values needed to be trimmed")
 
-        ## Deal with special cases
-        self._check_special_cases()
-
         ## Check for accumulated overlap
         self._check_accumulated_overlap()
-
-        ## Check for total number of rows
-        self._fix_n_rows()
 
     def _check_diff_raw_combined(self):
         # Check for diff between raw_Qs and Qs_combined
@@ -402,175 +399,6 @@ class QsPickleProcessor:
             self.logger.write(["The following timestamps were overlapped: "])
             self.logger.write(str_overlap_times.split('\n'), local_indent=1)
 
-    def _check_special_cases(self):
-        _, experiment, step, rperiod = hm.nsplit(self.current_period_path, 3)
-        period = rperiod[8:]
-
-        # Deal with special cases
-        # See analysis_notes.txt for more info
-        special_case = ('1A', 'rising-62L', 't40-t60')
-        if special_case == (experiment, step, period):
-            self.logger.write(f"Addressing special case {special_case}")
-            # delete several chunks of bad data from the text file
-            # Longer chunk may be from pausing the lighttable program, shorter 
-            # chunks may be due to low frame rate
-            #
-            # Delete in reverse order (lastest first) so line numbers don't 
-            # shift for the next deletion.
-            self.final_output = self._delete_chunk(1631, 1638, self.final_output)
-            self.final_output = self._delete_chunk(726, 1076, self.final_output)
-            self.final_output = self._delete_chunk(709, 714, self.final_output)
-            self.final_output = self._delete_chunk(622, 703, self.final_output)
-            self.final_output = self._delete_chunk(548, 561, self.final_output)
-            self.final_output = self._delete_chunk(494, 526, self.final_output)
-            self.final_output = self._delete_chunk(412, 417, self.final_output)
-            self.final_output = self._delete_chunk(390, 397, self.final_output)
-
-        special_case = ('2A', 'rising-50L', 't00-t60')
-        if special_case == (experiment, step, period):
-            self.logger.write(f"Addressing special case {special_case}")
-            # delete lines 1343 to 3916 from the text file
-            # Appears that I forgot to stop the lighttable program when pausing 
-            # the flow to clean out the trap
-            self.final_output = self._delete_chunk(1343, 3916, self.final_output)
-
-        special_case = ('3A', 'rising-75L', 't00-t20')
-        if special_case == (experiment, step, period):
-            print(f"Addressing special case {special_case}")
-            # delete lines 925 to 2368 from the text file
-            # Appears that I forgot to stop the lighttable program when pausing 
-            # the flow to clean out the trap
-            self.final_output = self._delete_chunk(925, 2368, self.final_output)
-
-        special_cases = [
-                # These special cases appear to have high variability from the 
-                # graphs
-                ('1B', 'rising-62L', 't20-t40'),
-                ('1B', 'rising-62L', 't40-t60'),
-                ('2A', 'rising-87L', 't00-t20'),
-                ('2A', 'rising-87L', 't20-t40'),
-                ('2B', 'falling-87L', 't00-t20'),
-                ('2B', 'falling-87L', 't20-t40'),
-                ('2B', 'falling-87L', 't40-t60'),
-                ('2B', 'falling-75L', 't00-t20'),
-                ('2B', 'falling-75L', 't20-t40'),
-                ('2B', 'falling-75L', 't40-t60'),
-                ('3A', 'falling-87L', 't00-t20'),
-                ('3A', 'falling-87L', 't20-t40'),
-                ('3A', 'falling-87L', 't40-t60'),
-                ('5A', 'rising-62L', 't00-t20'),
-                ('5A', 'rising-62L', 't20-t40'),
-                ('5A', 'rising-75', 't00-t20'),
-                ]
-        if (experiment, step, period) in special_cases:
-            self.logger.write_blankline(2)
-            self.logger.write(f"Suspicious case {(experiment, step, period)}")
-            self.logger.write_blankline(2)
-            sleep(3)
-            #assert(False)
-
-    def _delete_chunk(self, fstart, fend, data):
-        # For ease of use, fstart and fend are the line numbers in the 
-        # combined Qs file. The data between those lines (inclusive) will 
-        # be deleted and the timestamps reset to remove any gap
-        start, end = fstart-2, fend-2
-        self.logger.write(f"Deleting data lines {start} through {end}.")
-
-        # Delete the lines
-        index = data.index
-        output = data[(index < start) | (end < index)]
-
-        # Fix timestamps and indices
-        # Note, using the values method gets references to the underlying 
-        # data locations. Therefore I can change them without setting of a 
-        # copy warnings.
-        output.loc[:, 'timestamp'].values[start:] -= end - start + 1
-        output.set_index('timestamp', inplace=True)
-        output.reset_index(inplace=True)
-
-        return output
-
-    def _fix_n_rows(self):
-        # Check for total number of rows
-        # eg. trim to 1200 rows for a 20 minute period (1 row / sec)
-        _, experiment, step, rperiod = hm.nsplit(self.current_period_path, 3)
-        period = rperiod[8:]
-
-        start, end = [int(t[1:]) for t in period.split(sep='-')]
-        target_n_rows = abs(end - start) * 60 # one row per second
-        n_rows, ncols = self.final_output.shape
-
-        def check_if_extra(row_idx):
-            row = self.final_output.iloc[row_idx, :]
-            empty = row.isnull().any()
-            zero = (row[['Bedload all', 'Count all']] == 0).all()
-            return empty or zero
-
-        # Delete extra lines from end
-        while n_rows > target_n_rows and check_if_extra(-1):
-            self.final_output = self.final_output.iloc[:-1, :]
-            n_rows, ncols = self.final_output.shape
-            self.logger.write(f"Dropping last row (new n_rows = {n_rows})")
-
-        # Delete extra lines from beginning
-        while n_rows > target_n_rows and check_if_extra(0):
-            self.final_output = self.final_output.iloc[1:, :]
-            n_rows, ncols = self.final_output.shape
-            self.logger.write(f"Dropping first row (new n_rows = {n_rows})")
-
-        # Add or delete rows
-        n_rows, ncols = self.final_output.shape
-        if n_rows > target_n_rows:
-            # Delete data from head (~25%) and tail (~75%) to reach desired # 
-            # of rows
-            n_drop = n_rows - target_n_rows
-            self.logger.write(f"Need to drop {n_drop} rows containing data")
-            head_drop = n_drop // 4
-            tail_drop = n_drop - head_drop
-
-            total_mass = self.final_output.loc[:, 'Bedload all'].sum()
-            head = self.final_output.iloc[0:head_drop, :]
-            tail = self.final_output.iloc[-tail_drop:, :]
-            self.final_output = self.final_output.iloc[head_drop:-tail_drop, :]
-            self.previous_tail = tail
-
-            head_mass = head.loc[:, 'Bedload all'].sum()
-            tail_mass = tail.loc[:, 'Bedload all'].sum()
-            loss_ratio = (head_mass + tail_mass) / total_mass
-            self.logger.write([
-                f"Dropping {head_drop}s ({head_mass:0.2f}g) from head.",
-                f"Dropping {tail_drop}s ({tail_mass:0.2f}g) from tail",
-                f"Original total mass = {total_mass:0.2f}g ({loss_ratio:0.2%} trimmed)"])
-            if 0.04 < loss_ratio <= 0.05:
-                self.logger.write_blankline(2)
-                self.logger.write(f"###  {loss_ratio:0.2%} is high!  ###")
-                self.logger.write_blankline(2)
-                sleep(4)
-            elif 0.05 < loss_ratio:
-                self.logger.write_blankline(2)
-                self.logger.write(f"###  {loss_ratio:0.2%} is above tolerance!  ###")
-                self.logger.write_blankline(2)
-                assert(False)
-
-        elif n_rows < target_n_rows:
-            n_needed = target_n_rows - n_rows
-            self.logger.write(f"Too few rows. Adding {n_needed} blank rows.")
-            last_row = self.final_output.iloc[-1, :]
-            last_timestamp = last_row['timestamp']
-            n_cols  = last_row.shape[0]
-
-            needed_range = np.arange(n_needed)
-
-            np_empty = np.empty((n_needed, n_cols))
-            np_empty.fill(np.nan)
-            np_empty[:,0] = (needed_range + 1 + last_timestamp).T
-            pd_empty = pd.DataFrame(np_empty,
-                columns=last_row.index, index=needed_range + n_rows)
-            self.final_output = pd.concat([self.final_output, pd_empty])
-
-        n_rows, ncols = self.final_output.shape
-        self.logger.write(f"Final number of rows = {n_rows}")
-
 
     def calculate_stats(self):
         # Calc column averages and sums
@@ -636,7 +464,7 @@ class QsPickleProcessor:
 
         prepickles = {pkl_name : summary_stats}
         self.loader.produce_pickles(prepickles)
-        self.combined_file_counter += 1
+        #self.combined_file_counter += 1
 
     def write_stats_txt(self):
         filename = f"{self.statspickle_name}.txt"
@@ -652,12 +480,13 @@ class QsPickleProcessor:
 
 if __name__ == "__main__":
     # Run the extraction crawler
-    crawler = QsExtractor()
-    exp_root = Settings.root_dir
-    crawler.set_root(f"{exp_root}/extracted-lighttable-results")
-    crawler.set_output_dir(Settings.Qs_raw_pickles_dir)
-    crawler.run()
+    crawler = Qs_extractor.QsExtractor(
+            root_dir = settings.root_dir,
+            output_dir = settings.Qs_raw_pickles_dir,
+            )
+    metapickle_path = crawler.run()
 
     # Run the script
-    primary = QsPickleProcessor(output_txt=True)
-    primary.run()
+    merger = QsPickleProcessor(output_txt=True, 
+            metapickle_path=metapickle_path)
+    merger.run()
